@@ -170,6 +170,7 @@ impl ConfigWatcher {
         match window_manager {
             "mangowc" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
             "mango" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
+            "mangowm" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
             _ => {
                 // Error message removed, default to mmsg
                 format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt")
