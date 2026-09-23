@@ -5,15 +5,18 @@ use std::fs;
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 use yaml_rust2::YamlLoader;
-use tokio::sync::broadcast::error::TryRecvError;
 use serde::Deserialize;
 use std::collections::HashMap;
 use nix::unistd::User;
+use std::sync::{Arc, Mutex};
+use std::os::unix::process::CommandExt;
 
 #[derive(Clone)]
 pub struct ConfigWatcher {
     config_tx: broadcast::Sender<Option<yaml_rust2::Yaml>>,
     workspace_tx: broadcast::Sender<String>,
+    latest_config: Arc<Mutex<Option<yaml_rust2::Yaml>>>,
+    latest_workspace: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,19 +71,26 @@ impl ConfigWatcher {
     pub fn start() -> Self {
         let (config_tx, _) = broadcast::channel(16);
         let (workspace_tx, _) = broadcast::channel(16);
-        
+
+        let latest_config: Arc<Mutex<Option<yaml_rust2::Yaml>>> = Arc::new(Mutex::new(None));
+        let latest_workspace: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
         // Clone senders for the watcher task
         let config_tx_watcher = config_tx.clone();
         let workspace_tx_watcher = workspace_tx.clone();
-        
+        let latest_config_watcher = latest_config.clone();
+        let latest_workspace_watcher = latest_workspace.clone();
+
         // Initialize with current values
         let config_path = config_path();
-        
+
         // Load initial values in a blocking task
         let config_tx_init = config_tx.clone();
         let workspace_tx_init = workspace_tx.clone();
+        let latest_config_init = latest_config.clone();
+        let latest_workspace_init = latest_workspace.clone();
         let config_path_clone = config_path.clone();
-        
+
         tokio::spawn(async move {
             let initial_config = if config_path_clone.exists() {
                 tokio::task::spawn_blocking(move || Self::load_config_from_file(&config_path_clone).ok())
@@ -89,114 +99,124 @@ impl ConfigWatcher {
             } else {
                 None
             };
-            
+
+            *latest_config_init.lock().unwrap() = initial_config.clone();
             let _ = config_tx_init.send(initial_config.clone());
-            
+
             // Start workspace monitoring if we have config
             if let Some(config) = initial_config {
                 // Extract window_manager string and clone it
                 if let Some(window_manager) = config["window_manager"].as_str() {
                     let window_manager_string = window_manager.to_string();
-                    
+
                     // Start workspace monitoring task
                     let workspace_tx_task = workspace_tx_init.clone();
+
+                    let latest_ws_task = latest_workspace_init.clone();
                     tokio::spawn(async move {
-                        Self::monitor_workspaces(workspace_tx_task, window_manager_string).await;
+                        Self::monitor_workspaces(workspace_tx_task, latest_ws_task, window_manager_string).await;
                     });
                 }
             }
         });
-        
+
         // Start watcher task
         tokio::spawn(async move {
-            Self::watch_task(config_tx_watcher, workspace_tx_watcher).await;
+            Self::watch_task(
+                config_tx_watcher,
+                workspace_tx_watcher,
+                latest_config_watcher,
+                latest_workspace_watcher,
+            ).await;
         });
-        
+
         Self {
             config_tx,
             workspace_tx,
+            latest_config,
+            latest_workspace,
         }
     }
 
     pub fn get_workspace_states(&self) -> Vec<Value> {
-        if let Some(output) = self.get_recent_workspace_output() {
-            let mut config_rx = self.subscribe_config();
-            let mut latest_config = None;
-            while let Ok(c) = config_rx.try_recv() {
-                latest_config = c;
-            }
-            let wm = latest_config
-                .as_ref()
-                .and_then(|c| c["window_manager"].as_str())
-                .unwrap_or("");
+        let output = match self.latest_workspace.lock().unwrap().clone() {
+            Some(o) => o,
+            None => return Vec::new(),
+        };
 
-            eprintln!("get_workspace_states wm: {:?}", wm);
+        let wm = self
+            .latest_config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|c| c["window_manager"].as_str().map(|s| s.to_string()))
+            .unwrap_or_default();
 
-            match wm {
-                "duckwm" => parse_quack_output(&output),
-                _ => {
-                    let lines: Vec<&str> = output.lines().collect();
-                    parse_mmsg_output(&lines)
-                }
+        eprintln!("get_workspace_states wm: {:?}", wm);
+
+        match wm.as_str() {
+            "duckwm" => parse_quack_output(&output),
+            _ => {
+                let lines: Vec<&str> = output.lines().collect();
+                parse_mmsg_output(&lines)
             }
-        } else {
-            Vec::new()
         }
     }
 
     async fn monitor_workspaces(
         workspace_tx: broadcast::Sender<String>,
+        latest_workspace: Arc<Mutex<Option<String>>>,
         window_manager: String,
     ) {
         use tokio::time::{interval, Duration};
         use std::process::Command;
-        
+
         let mut interval_timer = interval(Duration::from_millis(100));
-        
+
         loop {
             interval_timer.tick().await;
-            
-            // Get the appropriate command for the window manager
+
             let command = Self::get_wm_command(&window_manager);
-            
-            // Run the command in a blocking task
             let tx = workspace_tx.clone();
+            let latest = latest_workspace.clone();
             let cmd_string = command.to_string();
-            
+
             tokio::task::spawn_blocking(move || {
-                if let Ok(output) = Command::new("su")
-                    .arg("-")
-                    .arg(get_user())
+                let uid = get_user_uid();
+                let gid = get_user_gid();
+                if let Ok(output) = Command::new("sh")
                     .arg("-c")
                     .arg(&cmd_string)
+                    .uid(uid)
+                    .gid(gid)
+                    .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
+                    .env("HOME", get_home())
+                    .env("DISPLAY", ":0")
                     .output()
                 {
                     if output.status.success() {
                         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        *latest.lock().unwrap() = Some(stdout.clone());
                         let _ = tx.send(stdout);
                     }
                 }
             }).await.ok();
         }
     }
-    
+
     fn get_wm_command(window_manager: &str) -> String {
-        let user_uid = get_user_uid();
         match window_manager {
-            "mangowc" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
-            "mango" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
-            "mangowm" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} mmsg -gt"),
-            "duckwm" => format!("XDG_RUNTIME_DIR=/run/user/{user_uid} quack get_workspace_states"),
-            _ => {
-                // Error message removed, default to mmsg
-                format!("XDG_RUNTIME_DIR=/run/user/{user_uid} quack get_workspace_states")
-            }
+            "mangowc" | "mango" | "mangowm" => "mmsg -gt".to_string(),
+            "duckwm" => "quack get_workspace_states".to_string(),
+            _ => "quack get_workspace_states".to_string(),
         }
     }
-    
+
     async fn watch_task(
         config_tx: broadcast::Sender<Option<yaml_rust2::Yaml>>,
         workspace_tx: broadcast::Sender<String>,
+        latest_config: Arc<Mutex<Option<yaml_rust2::Yaml>>>,
+        latest_workspace: Arc<Mutex<Option<String>>>,
     ) {
         use std::sync::mpsc;
         use std::time::{Instant, Duration};
@@ -264,11 +284,11 @@ impl ConfigWatcher {
                             && matches!(event.kind, EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Any))
                             && last_config.elapsed() > Duration::from_millis(200) {
 
-                            match Self::load_config_from_file(&config_target) {
+                                                        match Self::load_config_from_file(&config_target) {
                                 Ok(config) => {
+                                    *latest_config.lock().unwrap() = Some(config.clone());
                                     let _ = config_tx.send(Some(config.clone()));
 
-                                    // Restart workspace monitoring if window manager changed
                                     if let Some(window_manager) = config["window_manager"].as_str() {
                                         let window_manager_string = window_manager.to_string();
 
@@ -277,13 +297,13 @@ impl ConfigWatcher {
                                         }
 
                                         let tx = workspace_tx_handle.clone();
+                                        let latest_ws = latest_workspace.clone();
                                         workspace_monitor_handle = Some(tokio::spawn(async move {
-                                            Self::monitor_workspaces(tx, window_manager_string).await;
+                                            Self::monitor_workspaces(tx, latest_ws, window_manager_string).await;
                                         }));
                                     }
                                 }
                                 Err(_e) => {
-                                    // Error message removed
                                 }
                             }
                             last_config = Instant::now();
@@ -316,32 +336,12 @@ impl ConfigWatcher {
 
     /// Get current config (for initialization)
     pub fn get_config(&self) -> Option<yaml_rust2::Yaml> {
-        let mut receiver = self.subscribe_config();
-        match receiver.try_recv() {
-            Ok(config) => config,
-            Err(TryRecvError::Empty) => {
-                // Return the latest value
-                let mut latest = None;
-                while let Ok(config) = receiver.try_recv() {
-                    latest = config;
-                }
-                latest
-            }
-            Err(_) => None,
-        }
+        self.latest_config.lock().unwrap().clone()
     }
 
     /// Get recent workspace outputs (for initialization)
     pub fn get_recent_workspace_output(&self) -> Option<String> {
-        let mut receiver = self.subscribe_workspaces();
-        let mut latest = None;
-
-        // Get the most recent workspace output
-        while let Ok(output) = receiver.try_recv() {
-            latest = Some(output);
-        }
-
-        latest
+        self.latest_workspace.lock().unwrap().clone()
     }
 }
 
@@ -355,6 +355,14 @@ fn get_user_uid() -> u32 {
     .expect("getpwnam failed")
     .expect("user not found");
     user_info.uid.as_raw()
+}
+
+fn get_user_gid() -> u32 {
+    let user_name = get_user();
+    let user_info = User::from_name(user_name.as_str())
+        .expect("getpwnam failed")
+        .expect("user not found");
+    user_info.gid.as_raw()
 }
 
 fn get_home() -> String {

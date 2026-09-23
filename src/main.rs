@@ -27,7 +27,7 @@ async fn main() -> OpenRgbResult<()> {
         .spawn()?;
 
     // Sleep for 5 seconds for openrgb to fully initialize
-    sleep(Duration::from_secs(5)).await;
+    sleep(Duration::from_secs(10)).await;
 
     // Start keyboard listener
     let keyboard = KeyboardListener::start();
