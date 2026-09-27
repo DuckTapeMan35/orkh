@@ -33,7 +33,7 @@ impl KeyboardState {
     pub async fn current_keys(&self) -> Vec<String> {
         let pressed = self.pressed.lock().await;
         let order = self.order.lock().await;
-        
+
         // Only return keys that are currently pressed, in order
         order.iter()
             .filter(|k| pressed.contains(*k))
@@ -44,26 +44,26 @@ impl KeyboardState {
     /// Determine current mode from all pressed keys
     pub async fn get_current_mode(&self, modes: &HashSet<String>) -> String {
         let pressed = self.pressed.lock().await;
-        
+
         if pressed.is_empty() {
             return "base".to_string();
         }
 
         let modifiers = ["super", "shift", "alt", "ctrl"];
-        
+
         let order = self.order.lock().await;
-        
+
         // Get keys in order that are still pressed
         let current_pressed_in_order: Vec<String> = order
             .iter()
             .filter(|k| pressed.contains(*k))
             .cloned()
             .collect();
-        
+
         if current_pressed_in_order.is_empty() {
             return "base".to_string();
         }
-        
+
         // Try longest sequences first (N → 1)
         let len = current_pressed_in_order.len();
         let seq = current_pressed_in_order
@@ -113,7 +113,7 @@ impl KeyboardState {
             // Remove ALL occurrences of this key from order
             order.retain(|k| k != key);
         }
-        
+
         // If no keys are pressed, clear the entire order
         // This handles the "release all" case
         if pressed.is_empty() {

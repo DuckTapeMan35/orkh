@@ -1,15 +1,15 @@
-use notify::{recommended_watcher, RecursiveMode, Watcher, EventKind, event::ModifyKind};
 use crate::config::parse_mmsg_output;
 use crate::config::parse_quack_output;
-use std::fs;
-use std::path::PathBuf;
-use tokio::sync::broadcast;
-use yaml_rust2::YamlLoader;
+use nix::unistd::User;
+use notify::{event::ModifyKind, recommended_watcher, EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::collections::HashMap;
-use nix::unistd::User;
-use std::sync::{Arc, Mutex};
+use std::fs;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
+use yaml_rust2::YamlLoader;
 
 #[derive(Clone)]
 pub struct ConfigWatcher {
@@ -93,9 +93,11 @@ impl ConfigWatcher {
 
         tokio::spawn(async move {
             let initial_config = if config_path_clone.exists() {
-                tokio::task::spawn_blocking(move || Self::load_config_from_file(&config_path_clone).ok())
-                    .await
-                    .unwrap_or(None)
+                tokio::task::spawn_blocking(move || {
+                    Self::load_config_from_file(&config_path_clone).ok()
+                })
+                .await
+                .unwrap_or(None)
             } else {
                 None
             };
@@ -114,7 +116,12 @@ impl ConfigWatcher {
 
                     let latest_ws_task = latest_workspace_init.clone();
                     tokio::spawn(async move {
-                        Self::monitor_workspaces(workspace_tx_task, latest_ws_task, window_manager_string).await;
+                        Self::monitor_workspaces(
+                            workspace_tx_task,
+                            latest_ws_task,
+                            window_manager_string,
+                        )
+                        .await;
                     });
                 }
             }
@@ -127,7 +134,8 @@ impl ConfigWatcher {
                 workspace_tx_watcher,
                 latest_config_watcher,
                 latest_workspace_watcher,
-            ).await;
+            )
+            .await;
         });
 
         Self {
@@ -168,8 +176,8 @@ impl ConfigWatcher {
         latest_workspace: Arc<Mutex<Option<String>>>,
         window_manager: String,
     ) {
-        use tokio::time::{interval, Duration};
         use std::process::Command;
+        use tokio::time::{interval, Duration};
 
         let mut interval_timer = interval(Duration::from_millis(100));
 
@@ -191,7 +199,6 @@ impl ConfigWatcher {
                     .gid(gid)
                     .env("XDG_RUNTIME_DIR", format!("/run/user/{uid}"))
                     .env("HOME", get_home())
-                    .env("DISPLAY", ":0")
                     .output()
                 {
                     if output.status.success() {
@@ -200,7 +207,9 @@ impl ConfigWatcher {
                         let _ = tx.send(stdout);
                     }
                 }
-            }).await.ok();
+            })
+            .await
+            .ok();
         }
     }
 
@@ -219,7 +228,7 @@ impl ConfigWatcher {
         latest_workspace: Arc<Mutex<Option<String>>>,
     ) {
         use std::sync::mpsc;
-        use std::time::{Instant, Duration};
+        use std::time::{Duration, Instant};
 
         let (fs_tx, fs_rx) = mpsc::channel();
 
@@ -251,14 +260,19 @@ impl ConfigWatcher {
             // Create watchers
             let mut watcher = recommended_watcher(move |res| {
                 let _ = fs_tx.send(res);
-            }).expect("Failed to create watcher");
+            })
+            .expect("Failed to create watcher");
 
             // Watch only the specific files, not the directories
-            watcher.watch(&config_symlink_thread, RecursiveMode::NonRecursive).unwrap();
+            watcher
+                .watch(&config_symlink_thread, RecursiveMode::NonRecursive)
+                .unwrap();
 
             // If the symlink target is different, watch it too
             if config_target_thread != config_symlink_thread {
-                watcher.watch(&config_target_thread, RecursiveMode::NonRecursive).unwrap();
+                watcher
+                    .watch(&config_target_thread, RecursiveMode::NonRecursive)
+                    .unwrap();
             }
 
             // Keep the watcher alive
@@ -275,21 +289,27 @@ impl ConfigWatcher {
             while let Ok(event) = fs_rx.recv() {
                 match event {
                     Ok(event) => {
-                        let matches = event.paths.iter().any(|p| {
-                            p == &config_target || p == &config_symlink
-                        });
+                        let matches = event
+                            .paths
+                            .iter()
+                            .any(|p| p == &config_target || p == &config_symlink);
 
                         // Check if config changed
                         if matches
-                            && matches!(event.kind, EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Any))
-                            && last_config.elapsed() > Duration::from_millis(200) {
-
-                                                        match Self::load_config_from_file(&config_target) {
+                            && matches!(
+                                event.kind,
+                                EventKind::Modify(ModifyKind::Data(_))
+                                    | EventKind::Modify(ModifyKind::Any)
+                            )
+                            && last_config.elapsed() > Duration::from_millis(200)
+                        {
+                            match Self::load_config_from_file(&config_target) {
                                 Ok(config) => {
                                     *latest_config.lock().unwrap() = Some(config.clone());
                                     let _ = config_tx.send(Some(config.clone()));
 
-                                    if let Some(window_manager) = config["window_manager"].as_str() {
+                                    if let Some(window_manager) = config["window_manager"].as_str()
+                                    {
                                         let window_manager_string = window_manager.to_string();
 
                                         if let Some(handle) = workspace_monitor_handle.take() {
@@ -299,12 +319,16 @@ impl ConfigWatcher {
                                         let tx = workspace_tx_handle.clone();
                                         let latest_ws = latest_workspace.clone();
                                         workspace_monitor_handle = Some(tokio::spawn(async move {
-                                            Self::monitor_workspaces(tx, latest_ws, window_manager_string).await;
+                                            Self::monitor_workspaces(
+                                                tx,
+                                                latest_ws,
+                                                window_manager_string,
+                                            )
+                                            .await;
                                         }));
                                     }
                                 }
-                                Err(_e) => {
-                                }
+                                Err(_e) => {}
                             }
                             last_config = Instant::now();
                         }
@@ -317,10 +341,13 @@ impl ConfigWatcher {
         });
     }
 
-    fn load_config_from_file(path: &PathBuf) -> Result<yaml_rust2::Yaml, Box<dyn std::error::Error>> {
+    fn load_config_from_file(
+        path: &PathBuf,
+    ) -> Result<yaml_rust2::Yaml, Box<dyn std::error::Error>> {
         let contents = fs::read_to_string(path)?;
         let docs = YamlLoader::load_from_str(&contents)?;
-        docs.into_iter().next()
+        docs.into_iter()
+            .next()
             .ok_or_else(|| "Empty YAML document".into())
     }
 
@@ -352,8 +379,8 @@ fn get_user() -> String {
 fn get_user_uid() -> u32 {
     let user_name = get_user();
     let user_info = User::from_name(user_name.as_str())
-    .expect("getpwnam failed")
-    .expect("user not found");
+        .expect("getpwnam failed")
+        .expect("user not found");
     user_info.uid.as_raw()
 }
 
@@ -373,6 +400,6 @@ fn get_home() -> String {
 }
 
 fn config_path() -> PathBuf {
-    let symlink  =  PathBuf::from(get_home()).join(".config/orkh/config.yaml");
+    let symlink = PathBuf::from(get_home()).join(".config/orkh/config.yaml");
     std::fs::canonicalize(&symlink).unwrap_or(symlink)
 }

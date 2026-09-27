@@ -5,6 +5,11 @@ use std::collections::HashSet;
 use std::process::Command;
 use tokio::time::{sleep, Duration};
 
+const OPENRGB: &str = match option_env!("ORKH_OPENRGB") {
+    Some(p) => p,
+    None => "openrgb",
+};
+
 fn parse_workspace_output(output: &str, config_yaml: &Option<yaml_rust2::Yaml>) -> Vec<orkh::config::Value> {
     let wm = config_yaml
         .as_ref()
@@ -19,36 +24,42 @@ fn parse_workspace_output(output: &str, config_yaml: &Option<yaml_rust2::Yaml>) 
     }
 }
 
-#[tokio::main]
-async fn main() -> OpenRgbResult<()> {
+fn main() -> OpenRgbResult<()> {
+    orkh::sandbox::ensure_sandboxed();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> OpenRgbResult<()> {
     // Spawn OpenRGB server asynchronously
-    let mut server = Command::new("openrgb")
-        .arg("--server")
-        .spawn()?;
+    let mut server = Command::new(OPENRGB).arg("--server").spawn()?;
 
     // Sleep for 5 seconds for openrgb to fully initialize
-    sleep(Duration::from_secs(10)).await;
+    sleep(Duration::from_secs(5)).await;
 
     // Start keyboard listener
     let keyboard = KeyboardListener::start();
     let watcher = ConfigWatcher::start();
-    
+
     // Get receivers for updates
     let mut config_rx = watcher.subscribe_config();
     let mut workspace_rx = watcher.subscribe_workspaces();
-    
+
     // Current state
     let mut config_yaml = watcher.get_config();
     let mut config = config_yaml.as_ref().and_then(parse_config);
     let mut applicator = config.as_ref().map(LedApplicator::new);
-    
+
     // Get initial workspace states
     let mut workspace_states = if let Some(workspace_output) = watcher.get_recent_workspace_output() {
         parse_workspace_output(&workspace_output, &config_yaml)
     } else {
         Vec::new()
     };
-    
+
     // Update applicator with initial workspace states
     if let Some(ref mut app) = applicator.as_mut() {
         app.update_workspace_states(workspace_states.clone());
@@ -71,7 +82,7 @@ async fn main() -> OpenRgbResult<()> {
 
     controller.init().await?;
     let zone = controller.get_zone(0)?;
-    
+
     // Function to build modes from config
     fn build_modes_from_config(config: &Option<orkh::config::Config>) -> HashSet<String> {
         match config {
@@ -96,7 +107,7 @@ async fn main() -> OpenRgbResult<()> {
     let mut modes = build_modes_from_config(&config);
     // Note: get_current_mode is now async
     let mut prev_mode = keyboard.state.get_current_mode(&modes).await;
-    
+
     // Apply initial mode
     if let (Some(cfg), Some(app)) = (config.as_ref(), applicator.as_ref()) {
         let mut cmd = controller.cmd();
@@ -105,11 +116,11 @@ async fn main() -> OpenRgbResult<()> {
         }
         cmd.execute().await?;
     }
-    
+
     // Use a longer polling interval for keyboard (100ms is usually sufficient)
     let mut keyboard_interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
     keyboard_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    
+
     loop {
         tokio::select! {
             // Config changed signal
@@ -125,9 +136,9 @@ async fn main() -> OpenRgbResult<()> {
                     // Rebuild modes from new config
                     modes = build_modes_from_config(&config);
                 }
-                
+
                 let curr_mode = keyboard.state.get_current_mode(&modes).await;
-                
+
                 if let (Some(cfg), Some(app)) = (config.as_ref(), applicator.as_ref()) {
                     let mut cmd = controller.cmd();
                     if let Err(e) = app.apply_mode(&curr_mode, cfg, &mut cmd, &zone) {
@@ -136,20 +147,20 @@ async fn main() -> OpenRgbResult<()> {
                     cmd.execute().await?;
                 }
             }
-            
+
             // Workspace state changed
             Ok(workspace_output) = workspace_rx.recv() => {
                 // Parse workspace output using the appropriate parser for the window manager
                 workspace_states = parse_workspace_output(&workspace_output, &config_yaml);
-                
+
                 // Update applicator
                 if let Some(ref mut app) = applicator.as_mut() {
                     app.update_workspace_states(workspace_states.clone());
                 }
-                
+
                 // Note: get_current_mode is now async
                 let curr_mode = keyboard.state.get_current_mode(&modes).await;
-                
+
                 if let (Some(cfg), Some(app)) = (config.as_ref(), applicator.as_ref()) {
                     let mut cmd = controller.cmd();
                     if let Err(e) = app.apply_mode(&curr_mode, cfg, &mut cmd, &zone) {
@@ -158,20 +169,20 @@ async fn main() -> OpenRgbResult<()> {
                     cmd.execute().await?;
                 }
             }
-            
+
             // Keyboard state check
             _ = keyboard_interval.tick() => {
                 // Note: get_current_mode is now async
                 let curr_mode = keyboard.state.get_current_mode(&modes).await;
-                
+
                 if curr_mode != prev_mode {
                     if let (Some(cfg), Some(app)) = (config.as_ref(), applicator.as_ref()) {
                         let mut cmd = controller.cmd();
-                        
+
                         if let Err(e) = app.apply_mode(&curr_mode, cfg, &mut cmd, &zone) {
                             eprintln!("Error applying mode: {}", e);
                         }
-                        
+
                         cmd.execute().await?;
                     } else {
                         // Fallback: just turn all LEDs off

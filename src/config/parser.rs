@@ -13,11 +13,11 @@ pub fn parse_config(yaml: &yaml_rust2::Yaml) -> Option<Config> {
 
 fn parse_key_positions(yaml: &Yaml) -> HashMap<String, KeyPosition> {
     let mut result = HashMap::new();
-    
+
     if let Yaml::Hash(hash) = yaml {
         for (key, value) in hash {
             let key_name = key.as_str().unwrap_or("").to_string();
-            
+
             if let Yaml::Array(arr) = value {
                 let strings: Vec<String> = arr.iter()
                     .filter_map(|y| y.as_str())
@@ -31,7 +31,7 @@ fn parse_key_positions(yaml: &Yaml) -> HashMap<String, KeyPosition> {
             }
         }
     }
-    
+
     result
 }
 
@@ -68,16 +68,16 @@ fn parse_rule(yaml: &Yaml) -> Option<Rule> {
     if let Yaml::Hash(rule_hash) = yaml {
         let keys_yaml = rule_hash.get(&Yaml::String("keys".to_string()))?;
         let color_yaml = rule_hash.get(&Yaml::String("color".to_string()))?;
-        
+
         let keys = parse_keys(keys_yaml);
         let color = parse_color_spec(color_yaml)?;
-        
+
         // Parse optional condition and value
         let condition = rule_hash.get(&Yaml::String("condition".to_string()))
             .and_then(parse_condition);
         let value = rule_hash.get(&Yaml::String("value".to_string()))
             .and_then(parse_value);
-        
+
         Some(Rule { keys, color, condition, value })
     } else {
         None

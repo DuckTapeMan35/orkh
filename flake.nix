@@ -27,7 +27,7 @@
           cargo build
           exec sudo env \
             ORKH_USER="$USER" \
-            ORKH_WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-wayland-0}" \
+            ORKH_WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-}" \
             RUST_BACKTRACE=1 \
             "$@" \
             "''${CARGO_TARGET_DIR:-$PWD/target}/debug/orkh"

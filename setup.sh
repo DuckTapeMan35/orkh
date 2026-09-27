@@ -1,118 +1,127 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# orkh setup: installs the binary and a root systemd service.
+# orkh sandboxes itself with bubblewrap at startup, so the unit stays simple.
+set -euo pipefail
 
-# orkh Setup Script – dedicated user, config stays in user's home
+if [[ $EUID -eq 0 ]]; then
+  echo "Run this as your normal user; it uses sudo where needed." >&2
+  exit 1
+fi
+if [[ -e /etc/NIXOS ]]; then
+  echo "On NixOS, use the flake instead of this script." >&2
+  exit 1
+fi
 
-set -e
+ORKH_USER=$(id -un)
+ORKH_UID=$(id -u)
+RUNDIR=/run/user/$ORKH_UID
 
 # --------------------------------------------
-# 1. Build and install binary
+# 1. Dependencies
+# --------------------------------------------
+# Non-Nix builds expect bwrap at /usr/bin/bwrap, and the sandbox PATH is /usr/bin.
+missing=()
+[[ -x /usr/bin/bwrap ]] || missing+=(bubblewrap)
+[[ -x /usr/bin/openrgb ]] || missing+=(openrgb)
+if ((${#missing[@]})); then
+  echo "Missing: ${missing[*]}. Install them with your package manager." >&2
+  exit 1
+fi
+
+if systemctl is-enabled --quiet openrgb.service 2>/dev/null; then
+  echo "Warning: openrgb.service is enabled and will fight orkh over the keyboard." >&2
+  echo "         Disable it with: sudo systemctl disable --now openrgb.service" >&2
+fi
+
+# --------------------------------------------
+# 2. Build and install
 # --------------------------------------------
 echo "Building release binary..."
 cargo build --release
-
-echo "Installing binary to /usr/bin/..."
-sudo cp target/release/orkh /usr/bin/
+sudo install -Dm755 target/release/orkh /usr/bin/orkh
 
 # --------------------------------------------
-# 2. Config directory (user's original location)
+# 3. Default config
 # --------------------------------------------
-ORKH_USER=$(whoami)
-ORKH_UID=$(id -u)
 CONFIG_DIR="$HOME/.config/orkh"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
-
-# Create config directory if missing (as the original user)
 mkdir -p "$CONFIG_DIR"
 
-# Create default config if missing
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Creating default config in $CONFIG_FILE..."
-    cat > "$CONFIG_FILE" << 'EOL'
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "Creating default config in $CONFIG_FILE..."
+  cat >"$CONFIG_FILE" <<'EOL'
 pywal: false
+openrgb:
+  i2c: false  # true for RGB RAM / motherboard / GPU lighting (needs i2c-dev + SMBus driver)
 modes:
   base:
     rules:
       - keys: ['all']
-        color: '[255,0,0]'
+        color: [255, 0, 0]
 EOL
 fi
 
 # --------------------------------------------
-# 3. Create systemd service
+# 4. systemd units
 # --------------------------------------------
-SERVICE_FILE="/etc/systemd/system/orkh.service"
-echo "Creating systemd service: $SERVICE_FILE"
+echo "Installing systemd units..."
 
-sudo tee "$SERVICE_FILE" > /dev/null << EOF
+sudo tee /etc/systemd/system/orkh.service >/dev/null <<EOF
 [Unit]
-Description=Keyboard Highlighter
-After=graphical.target display-manager.service
-Wants=graphical.target
+Description=orkh keyboard highlighter
 
 [Service]
 Type=simple
-User=root
 ExecStart=/usr/bin/orkh
-Environment=DISPLAY=:0
-Environment=XDG_RUNTIME_DIR=/run/user/$ORKH_UID
 Environment=ORKH_USER=$ORKH_USER
-Environment=HOME=/root
-
-# Create /run/orkh-openrgb-config automatically
-RuntimeDirectory=orkh-openrgb-config
-
-# Capabilities
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_RAWIO CAP_SETUID CAP_SETGID
-AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_SYS_RAWIO CAP_SETUID CAP_SETGID
-NoNewPrivileges=no
-
-# Filesystem restrictions
-ProtectSystem=full
-ReadWritePaths=/home/$ORKH_USER/.config/orkh /tmp/.X11-unix /run/user/$ORKH_UID
-ProtectHome=read-only
-PrivateTmp=no
-
-# Device policy - allow input devices
-PrivateDevices=no
-DevicePolicy=closed
-DeviceAllow=/dev/null rw
-DeviceAllow=/dev/zero rw
-DeviceAllow=/dev/random r
-DeviceAllow=/dev/urandom r
-DeviceAllow=/dev/input rw
-DeviceAllow=/dev/input/event* rw
-DeviceAllow=char-usb_device rw
-DeviceAllow=char-hidraw rw
-DeviceAllow=char-input rw
-
-# Hardening
-SystemCallFilter=~@cpu-emulation @obsolete @resources @keyring @module
-SystemCallArchitectures=native
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictRealtime=yes
-RestrictNamespaces=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=yes
-RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
-
-StandardInput=null
-StandardOutput=journal
-StandardError=journal
+Environment=ORKH_WAYLAND_DISPLAY=wayland-0
+StateDirectory=orkh
 Restart=on-failure
 RestartSec=5
 
+# Hardening that doesn't interfere with bwrap; the sandbox does the rest
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
+EOF
+
+# The sandbox binds WM sockets once at startup, so restart orkh when one appears
+sudo tee /etc/systemd/system/orkh-rebind.path >/dev/null <<EOF
+[Unit]
+Description=Watch for window manager sockets for orkh
+
+[Path]
+PathExists=$RUNDIR/wayland-0
+PathExists=$RUNDIR/duckwm.sock
+PathExists=/tmp/duckwm-$ORKH_UID.sock
+Unit=orkh-rebind.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Tied to the runtime dir, so it resets on logout and fires again on the next login
+sudo tee /etc/systemd/system/orkh-rebind.service >/dev/null <<EOF
+[Unit]
+Description=Restart orkh to bind the window manager socket
+BindsTo=user-runtime-dir@$ORKH_UID.service
+After=user-runtime-dir@$ORKH_UID.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemctl try-restart orkh.service
 EOF
 
 # --------------------------------------------
-# 4. Enable the service
+# 5. Enable
 # --------------------------------------------
-echo "Reloading systemd and starting service..."
 sudo systemctl daemon-reload
-sudo systemctl enable orkh.service
+sudo systemctl enable --now orkh.service orkh-rebind.path
 
 echo ""
-echo "Installation complete"
+echo "Installation complete. Logs: journalctl -u orkh -f"
