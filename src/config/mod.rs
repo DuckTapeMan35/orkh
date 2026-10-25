@@ -1,9 +1,10 @@
-pub mod watchers;
-pub mod parser;
 pub mod applicator;
+pub mod duckwm;
+pub mod parser;
+pub mod watchers;
 
-pub use watchers::{ConfigWatcher, Config, KeyPosition, Mode, Rule, ColorSpec, Condition, Value};
+pub use applicator::LedApplicator;
 pub use parser::parse_config;
 pub use parser::parse_mmsg_output;
 pub use parser::parse_quack_output;
-pub use applicator::LedApplicator;
+pub use watchers::{ColorSpec, Condition, Config, ConfigWatcher, KeyPosition, Mode, Rule, Value};

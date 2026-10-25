@@ -1,6 +1,8 @@
 use openrgb2::{Color, OpenRgbClient, OpenRgbResult};
+use orkh::config::{
+    parse_config, parse_mmsg_output, parse_quack_output, ConfigWatcher, LedApplicator,
+};
 use orkh::keyboard::KeyboardListener;
-use orkh::config::{ConfigWatcher, parse_config, LedApplicator, parse_mmsg_output, parse_quack_output};
 use std::collections::HashSet;
 use std::process::Command;
 use tokio::time::{sleep, Duration};
@@ -10,7 +12,10 @@ const OPENRGB: &str = match option_env!("ORKH_OPENRGB") {
     None => "openrgb",
 };
 
-fn parse_workspace_output(output: &str, config_yaml: &Option<yaml_rust2::Yaml>) -> Vec<orkh::config::Value> {
+fn parse_workspace_output(
+    output: &str,
+    config_yaml: &Option<yaml_rust2::Yaml>,
+) -> Vec<orkh::config::Value> {
     let wm = config_yaml
         .as_ref()
         .and_then(|c| c["window_manager"].as_str())
@@ -54,7 +59,8 @@ async fn run() -> OpenRgbResult<()> {
     let mut applicator = config.as_ref().map(LedApplicator::new);
 
     // Get initial workspace states
-    let mut workspace_states = if let Some(workspace_output) = watcher.get_recent_workspace_output() {
+    let mut workspace_states = if let Some(workspace_output) = watcher.get_recent_workspace_output()
+    {
         parse_workspace_output(&workspace_output, &config_yaml)
     } else {
         Vec::new()
@@ -68,7 +74,6 @@ async fn run() -> OpenRgbResult<()> {
     // Connect to OpenRGB
     let client = OpenRgbClient::connect().await?;
 
-    // Optional: if you want the server to run in background
     tokio::spawn(async move {
         let _ = server.wait();
     });
@@ -93,9 +98,16 @@ async fn run() -> OpenRgbResult<()> {
             None => {
                 // Default modes if no config
                 [
-                    "super", "shift", "ctrl", "alt",
-                    "super_shift", "super_ctrl", "super_alt",
-                    "shift_ctrl", "shift_alt", "ctrl_alt",
+                    "super",
+                    "shift",
+                    "ctrl",
+                    "alt",
+                    "super_shift",
+                    "super_ctrl",
+                    "super_alt",
+                    "shift_ctrl",
+                    "shift_alt",
+                    "ctrl_alt",
                 ]
                 .into_iter()
                 .map(String::from)
