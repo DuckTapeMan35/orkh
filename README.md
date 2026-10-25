@@ -324,3 +324,32 @@ workspace 10. Rules with this condition do nothing while duckwm isn't running.
 
 - a hex string: `"#4ebc42"`
 - an RGB array: `[255, 255, 255]`
+
+## Keybind highlights (duckwm)
+
+orkh can light every key duckwm has bound, so holding a modifier shows what
+you can press with it. Give it colors to cycle through:
+
+```yaml
+keybind_colors: ["#4ebc42", "#439340", "#425e7f", "#73a146", "#55799d"]
+```
+
+- Each bound key lights in the modes its modifiers make, in any press order:
+  `super+shift+q` lights `q` in both `super_shift` and `shift_super`. These
+  modes work even if your config doesn't define them.
+- Within each set of modifiers, keys take the colors in turn, in a fixed
+  order, so a key keeps its color as long as your binds stay the same.
+- **Your own rules win.** Generated colors are applied first, so any rule you
+  write for a key in that mode (including `condition: workspaces` on the number
+  keys) overrides them. To pin one combination to a color, add a rule for it:
+
+  ```yaml
+  super_shift:
+    rules:
+      - keys: [q]
+        color: "#ff0000"
+  ```
+
+- orkh rereads duckwm's binds every couple of seconds, so a config reload in
+  duckwm shows up on its own. Leave `keybind_colors` out (or empty) to turn
+  this off.

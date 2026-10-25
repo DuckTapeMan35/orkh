@@ -1,5 +1,6 @@
-use openrgb2::{Color, Zone, Command};
-use crate::config::{Config, ColorSpec, KeyPosition, Condition, Value, Rule};
+use crate::config::{keybinds, ColorSpec, Condition, Config, KeyPosition, Rule, Value};
+use duckwm::KeyCombo;
+use openrgb2::{Color, Command, Zone};
 use std::collections::{HashMap, HashSet};
 
 pub struct LedApplicator {
@@ -7,6 +8,7 @@ pub struct LedApplicator {
     workspace_states: Vec<Value>,
     last_non_empty_workspaces: HashSet<String>,
     wm_integration_enabled: bool,
+    keybind_rules: HashMap<String, Vec<Rule>>,
 }
 
 impl LedApplicator {
@@ -21,9 +23,8 @@ impl LedApplicator {
                     key_mapping.insert(key_name.clone(), vec![normalized]);
                 }
                 KeyPosition::Multiple(keys) => {
-                    let normalized: Vec<String> = keys.iter()
-                        .map(|k| normalize_key_name(k))
-                        .collect();
+                    let normalized: Vec<String> =
+                        keys.iter().map(|k| normalize_key_name(k)).collect();
                     key_mapping.insert(key_name.clone(), normalized);
                 }
             }
@@ -34,6 +35,7 @@ impl LedApplicator {
             workspace_states: Vec::new(),
             last_non_empty_workspaces: HashSet::new(),
             wm_integration_enabled: true,
+            keybind_rules: HashMap::new(),
         }
     }
 
@@ -53,6 +55,16 @@ impl LedApplicator {
         }
     }
 
+    /// Light the keys duckwm has bound, in config.keybind_colors.
+    pub fn update_keybinds(&mut self, combos: &[KeyCombo], config: &Config) {
+        self.keybind_rules = keybinds::rules(combos, &config.keybind_colors);
+    }
+
+    /// The modes keybinds light keys in, which may not be in the config.
+    pub fn keybind_modes(&self) -> impl Iterator<Item = &String> {
+        self.keybind_rules.keys()
+    }
+
     /// Enable/disable window manager integration
     pub fn set_wm_integration(&mut self, enabled: bool) {
         self.wm_integration_enabled = enabled;
@@ -67,6 +79,11 @@ impl LedApplicator {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Create a desired_state map: LED ID -> Color
         let mut desired_state: HashMap<usize, Color> = HashMap::new();
+
+        // Bound keys first, so the config's own rules for a key win
+        for rule in self.keybind_rules.get(mode_name).into_iter().flatten() {
+            self.apply_rule(rule, &mut desired_state, zone)?;
+        }
 
         // Get the mode rules
         if let Some(mode) = config.modes.get(mode_name) {
@@ -119,7 +136,9 @@ impl LedApplicator {
                                         let should_apply = match value {
                                             Value::Focused => {
                                                 // Check if workspace is focused
-                                                if let Some(state) = self.workspace_states.get(workspace_index) {
+                                                if let Some(state) =
+                                                    self.workspace_states.get(workspace_index)
+                                                {
                                                     matches!(state, Value::Focused)
                                                 } else {
                                                     false
@@ -127,7 +146,9 @@ impl LedApplicator {
                                             }
                                             Value::Active => {
                                                 // Check if workspace is active (not focused)
-                                                if let Some(state) = self.workspace_states.get(workspace_index) {
+                                                if let Some(state) =
+                                                    self.workspace_states.get(workspace_index)
+                                                {
                                                     matches!(state, Value::Active)
                                                 } else {
                                                     false
@@ -135,7 +156,9 @@ impl LedApplicator {
                                             }
                                             Value::Inactive => {
                                                 // Check if workspace is inactive
-                                                if let Some(state) = self.workspace_states.get(workspace_index) {
+                                                if let Some(state) =
+                                                    self.workspace_states.get(workspace_index)
+                                                {
                                                     matches!(state, Value::Inactive)
                                                 } else {
                                                     false
@@ -233,9 +256,7 @@ impl LedApplicator {
 
     fn resolve_color(&self, color_spec: &ColorSpec) -> Color {
         match color_spec {
-            ColorSpec::Rgb([r, g, b]) => {
-                Color::new(*r, *g, *b)
-            }
+            ColorSpec::Rgb([r, g, b]) => Color::new(*r, *g, *b),
         }
     }
 

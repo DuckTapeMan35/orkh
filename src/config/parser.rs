@@ -7,6 +7,10 @@ pub fn parse_config(yaml: &yaml_rust2::Yaml) -> Option<Config> {
         log_level: yaml["log_level"].as_str().unwrap_or("info").to_string(),
         key_positions: parse_key_positions(&yaml["key_positions"]),
         modes: parse_modes(&yaml["modes"]),
+        keybind_colors: match &yaml["keybind_colors"] {
+            Yaml::Array(colors) => colors.iter().filter_map(parse_color_spec).collect(),
+            _ => Vec::new(),
+        },
     })
 }
 

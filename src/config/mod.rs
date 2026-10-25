@@ -1,5 +1,6 @@
 pub mod applicator;
 pub mod duckwm;
+pub mod keybinds;
 pub mod parser;
 pub mod watchers;
 

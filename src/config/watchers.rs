@@ -1,3 +1,4 @@
+use duckwm::KeyCombo;
 use nix::unistd::User;
 use notify::{event::ModifyKind, recommended_watcher, EventKind, RecursiveMode, Watcher};
 use serde::Deserialize;
@@ -12,8 +13,10 @@ use yaml_rust2::YamlLoader;
 pub struct ConfigWatcher {
     config_tx: broadcast::Sender<Option<yaml_rust2::Yaml>>,
     workspace_tx: broadcast::Sender<Vec<Value>>,
+    keybind_tx: broadcast::Sender<Vec<KeyCombo>>,
     latest_config: Arc<Mutex<Option<yaml_rust2::Yaml>>>,
     latest_workspace: Arc<Mutex<Option<Vec<Value>>>>,
+    latest_keybinds: Arc<Mutex<Option<Vec<KeyCombo>>>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,6 +24,7 @@ pub struct Config {
     pub log_level: String,
     pub key_positions: HashMap<String, KeyPosition>,
     pub modes: HashMap<String, Mode>,
+    pub keybind_colors: Vec<ColorSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -67,16 +71,20 @@ impl ConfigWatcher {
     pub fn start() -> Self {
         let (config_tx, _) = broadcast::channel(16);
         let (workspace_tx, _) = broadcast::channel(16);
+        let (keybind_tx, _) = broadcast::channel(16);
 
         let latest_config: Arc<Mutex<Option<yaml_rust2::Yaml>>> = Arc::new(Mutex::new(None));
         let latest_workspace: Arc<Mutex<Option<Vec<Value>>>> = Arc::new(Mutex::new(None));
+        let latest_keybinds: Arc<Mutex<Option<Vec<KeyCombo>>>> = Arc::new(Mutex::new(None));
 
-        // Workspace states from duckwm, for the whole run: it reconnects by itself.
+        // Workspace states and keybinds from duckwm, for the whole run: it reconnects by itself.
         let socket = PathBuf::from(format!("/run/user/{}/duckwm.sock", get_user_uid()));
-        tokio::spawn(crate::config::duckwm::monitor_workspaces(
+        tokio::spawn(crate::config::duckwm::monitor(
             socket,
             workspace_tx.clone(),
             latest_workspace.clone(),
+            keybind_tx.clone(),
+            latest_keybinds.clone(),
         ));
 
         // Load the initial config in a blocking task
@@ -101,8 +109,10 @@ impl ConfigWatcher {
         Self {
             config_tx,
             workspace_tx,
+            keybind_tx,
             latest_config,
             latest_workspace,
+            latest_keybinds,
         }
     }
 
@@ -113,6 +123,20 @@ impl ConfigWatcher {
             .unwrap()
             .clone()
             .unwrap_or_default()
+    }
+
+    /// The key combinations duckwm has bound, as last seen.
+    pub fn get_keybinds(&self) -> Vec<KeyCombo> {
+        self.latest_keybinds
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_default()
+    }
+
+    /// Get a receiver for keybind updates, sent when they change
+    pub fn subscribe_keybinds(&self) -> broadcast::Receiver<Vec<KeyCombo>> {
+        self.keybind_tx.subscribe()
     }
 
     async fn watch_task(

@@ -35,7 +35,8 @@ impl KeyboardState {
         let order = self.order.lock().await;
 
         // Only return keys that are currently pressed, in order
-        order.iter()
+        order
+            .iter()
             .filter(|k| pressed.contains(*k))
             .cloned()
             .collect()
