@@ -20,13 +20,13 @@
         # Baked into the binary via option_env!
         ORKH_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
         ORKH_OPENRGB = "${pkgs.openrgb}/bin/openrgb";
+        ORKH_SHELL = "${pkgs.bashInteractive}/bin/bash";
 
         orkhRun = pkgs.writeShellScriptBin "orkh-run" ''
           set -euo pipefail
           cargo build
           exec sudo env \
             ORKH_USER="$USER" \
-            ORKH_WAYLAND_DISPLAY="''${WAYLAND_DISPLAY:-}" \
             RUST_BACKTRACE=1 \
             "$@" \
             "''${CARGO_TARGET_DIR:-$PWD/target}/debug/orkh"
@@ -41,8 +41,12 @@
           pname = "orkh";
           version = "0.1.0";
           src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-          inherit ORKH_BWRAP ORKH_OPENRGB;
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+            # Git dependencies aren't hashed in Cargo.lock: build once, paste the hash.
+            outputHashes."duckwm-0.1.0" = "sha256-scCh9lL3i/2QucIkWyw3xw68Z9izFJ0SdVnyc+O1Bbs=";
+          };
+          inherit ORKH_BWRAP ORKH_OPENRGB ORKH_SHELL;
           meta.mainProgram = "orkh";
         };
 
@@ -59,7 +63,7 @@
             orkhRun
             orkhShell
           ];
-          inherit ORKH_BWRAP ORKH_OPENRGB;
+          inherit ORKH_BWRAP ORKH_OPENRGB ORKH_SHELL;
           RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
         };
       }
@@ -89,20 +93,14 @@
 
             user = lib.mkOption {
               type = lib.types.str;
-              description = "User whose config (~/.config/orkh) and window manager orkh follows.";
+              description = "User whose config (~/.config/orkh) and duckwm orkh follows.";
             };
 
             uid = lib.mkOption {
               type = lib.types.nullOr lib.types.int;
               default = config.users.users.${cfg.user}.uid;
               defaultText = lib.literalExpression "config.users.users.\${user}.uid";
-              description = "UID of that user; needed to locate /run/user/<uid>.";
-            };
-
-            waylandDisplay = lib.mkOption {
-              type = lib.types.nullOr lib.types.str;
-              default = "wayland-0";
-              description = "Wayland socket name for mango (mmsg). null to disable.";
+              description = "UID of that user; needed to find /run/user/<uid>/duckwm.sock.";
             };
 
             i2c = {
@@ -139,9 +137,6 @@
               environment = {
                 ORKH_USER = cfg.user;
               }
-              // lib.optionalAttrs (cfg.waylandDisplay != null) {
-                ORKH_WAYLAND_DISPLAY = cfg.waylandDisplay;
-              }
               // lib.optionalAttrs cfg.i2c.enable {
                 ORKH_I2C = "1";
               };
@@ -158,11 +153,11 @@
               };
             };
 
-            # The sandbox binds WM sockets once at startup: restart orkh when one appears
+            # The sandbox binds duckwm's socket once at startup: restart orkh when it appears
             systemd.paths.orkh-rebind = {
               wantedBy = [ "multi-user.target" ];
               pathConfig = {
-                PathExists = lib.optional (cfg.waylandDisplay != null) "${rundir}/${cfg.waylandDisplay}" ++ [
+                PathExists = [
                   "${rundir}/duckwm.sock"
                   "/tmp/duckwm-${uid}.sock"
                 ];
@@ -172,7 +167,7 @@
 
             # Tied to the runtime dir, so it resets on logout and fires again on login
             systemd.services.orkh-rebind = {
-              description = "Restart orkh to bind the window manager socket";
+              description = "Restart orkh to bind duckwm's socket";
               bindsTo = [ "user-runtime-dir@${uid}.service" ];
               after = [ "user-runtime-dir@${uid}.service" ];
               serviceConfig = {

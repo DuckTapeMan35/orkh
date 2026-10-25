@@ -2,7 +2,7 @@
 
 `orkh` highlights keyboard keys while they are held, based on a YAML configuration file. It is written in **Rust** and uses **OpenRGB** for LED control.
 
-It also supports **workspace-aware highlighting** (currently only mangowm, other compositors/wms to follow).
+It also supports **workspace-aware highlighting** with [duckwm](https://github.com/DuckTapeMan35/duckwm).
 
 ## Requirements
 
@@ -14,6 +14,7 @@ It also supports **workspace-aware highlighting** (currently only mangowm, other
 ## Install / Setup (systemd)
 
 This repository includes a setup script that:
+
 - builds `orkh` in release mode
 - installs it to `/usr/bin/orkh`
 - creates a systemd service at `/etc/systemd/system/orkh.service` (more init systems will be supported in the future, but you could make an equivalent service manually)
@@ -34,9 +35,10 @@ sudo systemctl restart orkh.service
 ```
 
 Notes:
+
 - `orkh` starts an OpenRGB server process (`openrgb --server`) and waits ~5 seconds to let it initialize.
 - The service sets `ORKH_USER` so the root-running service can still read the config from your user’s home directory.
-- As a result of needing to read input events, making ipc calls and reading the config the safest option is to run this as a root service, with basically no way to create a custom user for the service. Until wayland adds a way to read arbitrary input (much like the x11 api which has widespread misunderstandings over its security) this is the only option to make this work on it.
+- As a result of needing to read input events and reading the config the safest option is to run this as a root service, with basically no way to create a custom user for the service. Until wayland adds a way to read arbitrary input (much like the x11 api which has widespread misunderstandings over its security) this is the only option to make this work on it.
 
 ## Configuration
 
@@ -47,7 +49,6 @@ Config file location:
 ### Example config
 
 ```yaml
-window_manager: mangowc
 log_level: critical
 
 key_positions:
@@ -79,16 +80,16 @@ key_positions:
     - p
 
   # Numbers must be inside quotes or they will be cast into integers
-  1_key: ['1']
-  2_key: ['2']
-  3_key: ['3']
-  4_key: ['4']
-  5_key: ['5']
-  6_key: ['6']
-  7_key: ['7']
-  8_key: ['8']
-  9_key: ['9']
-  0_key: ['0']
+  1_key: ["1"]
+  2_key: ["2"]
+  3_key: ["3"]
+  4_key: ["4"]
+  5_key: ["5"]
+  6_key: ["6"]
+  7_key: ["7"]
+  8_key: ["8"]
+  9_key: ["9"]
+  0_key: ["0"]
 
   # Special keys
   super: [left windows]
@@ -99,7 +100,7 @@ key_positions:
   alt: [left alt, right alt]
 
   # Groups
-  numbers: ['1','2','3','4','5','6','7','8','9','0']
+  numbers: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
   layouts: [t, s, m, g, d, c, v]
   arrows: [right arrow, left arrow, up arrow, down arrow]
 
@@ -148,11 +149,11 @@ modes:
       - keys: [i]
         color: "#439340"
       - keys: [arrows]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [shift]
         color: [255, 255, 255]
       - keys: [tab]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [e]
         color: "#425e7f"
       - keys: [n]
@@ -194,7 +195,7 @@ modes:
       - keys: [shift]
         color: [255, 255, 255]
       - keys: [arrows]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [layouts]
         color: "#4ebc42"
       - keys: [n]
@@ -224,7 +225,7 @@ modes:
       - keys: [shift]
         color: [255, 255, 255]
       - keys: [arrows]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [layouts]
         color: "#4ebc42"
       - keys: [n]
@@ -245,9 +246,9 @@ modes:
         value: focused
         color: "#4ebc42"
       - keys: [alt]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [shift]
-        color: [255,255,255]
+        color: [255, 255, 255]
       - keys: [tab]
         color: "#4ebc42"
       - keys: [f]
@@ -274,7 +275,7 @@ modes:
       - keys: [i]
         color: "#4ebc42"
       - keys: [alt, shift]
-        color: [255,255,255]
+        color: [255, 255, 255]
 
   shift_alt:
     rules:
@@ -293,7 +294,7 @@ modes:
       - keys: [i]
         color: "#4ebc42"
       - keys: [alt, shift]
-        color: [255,255,255]
+        color: [255, 255, 255]
 ```
 
 ## How it works
@@ -304,25 +305,22 @@ modes:
   - ordered combos: `super_shift`, `shift_super`, etc.
 - Rules within a mode are applied in order; later rules can override earlier ones.
 
-## Workspace integration (mangowc)
+## Workspace integration (duckwm)
 
-Set:
-
-```yaml
-window_manager: mangowc # or mango or mangowm
-```
-
-Then you can use:
+orkh talks to duckwm over its socket (`/run/user/<uid>/duckwm.sock`), so
+there's nothing to set: whenever duckwm is running, you can use
 
 ```yaml
 condition: workspaces
 value: active|inactive|focused
 ```
 
-to color keys (commonly number keys) based on workspace state.
+to color the number keys by workspace: 1-9 for workspaces 1-9, 0 for
+workspace 10. Rules with this condition do nothing while duckwm isn't running.
 
 ## Color formats
 
 `color` can be either:
+
 - a hex string: `"#4ebc42"`
 - an RGB array: `[255, 255, 255]`

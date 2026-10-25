@@ -10,6 +10,12 @@ const BWRAP: &str = match option_env!("ORKH_BWRAP") {
     None => "/usr/bin/bwrap",
 };
 
+/// The debug shell (ORKH_DEBUG_SHELL): pinned by the flake, like bwrap.
+const SHELL: &str = match option_env!("ORKH_SHELL") {
+    Some(p) => p,
+    None => "/bin/sh",
+};
+
 /// Marker telling the re-exec'd instance it is already inside the sandbox.
 const SANDBOXED: &str = "ORKH_SANDBOXED";
 
@@ -18,10 +24,6 @@ const OPENRGB_STATE: &str = "/var/lib/orkh/openrgb";
 
 fn push(v: &mut Vec<String>, parts: &[&str]) {
     v.extend(parts.iter().map(|s| s.to_string()));
-}
-
-fn nonempty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.is_empty())
 }
 
 /// Whether to expose /dev/i2c-* (RGB RAM, motherboard, GPU lighting).
@@ -62,7 +64,7 @@ pub fn ensure_sandboxed() {
     let cfg_dir = format!("{home}/.config/orkh");
     let rundir = format!("/run/user/{uid}");
     let path = if nixos {
-        format!("/run/current-system/sw/bin:/etc/profiles/per-user/{user}/bin")
+        String::new()
     } else {
         "/usr/bin".to_string()
     };
@@ -71,9 +73,6 @@ pub fn ensure_sandboxed() {
     let exe_s = exe.to_str().expect("non-UTF-8 exe path").to_string();
 
     fs::create_dir_all(OPENRGB_STATE).expect("create OpenRGB state dir");
-
-    // Env vars to set after --clearenv (bwrap applies env options in order)
-    let mut extra_env: Vec<(String, String)> = Vec::new();
 
     let mut a: Vec<String> = Vec::new();
 
@@ -91,9 +90,7 @@ pub fn ensure_sandboxed() {
             "--cap-drop",
             "ALL",
             "--cap-add",
-            "CAP_SETUID", // Command::uid() for mmsg/quack
-            "--cap-add",
-            "CAP_SETGID", // Command::gid() + setgroups(0)
+            "CAP_DAC_OVERRIDE", // connect to the user's duckwm socket (connect needs write access)
         ],
     );
 
@@ -106,20 +103,11 @@ pub fn ensure_sandboxed() {
                 "/nix/store",
                 "/nix/store",
                 "--ro-bind",
-                "/run/current-system",
-                "/run/current-system", // sh, mmsg, ...
-                "--ro-bind",
                 "/etc/static",
                 "/etc/static",
                 "--ro-bind-try",
-                "/etc/profiles",
-                "/etc/profiles", // per-user packages (quack)
-                "--ro-bind-try",
                 "/etc/udev",
                 "/etc/udev",
-                "--symlink",
-                "/run/current-system/sw/bin/sh",
-                "/bin/sh",
             ],
         );
     } else {
@@ -263,22 +251,7 @@ pub fn ensure_sandboxed() {
 
     push(&mut a, &["--tmpfs", &rundir]);
 
-    // mango (mmsg): Wayland compositor socket
-    if let Some(wl) = nonempty_env("ORKH_WAYLAND_DISPLAY") {
-        let sock = if wl.starts_with('/') {
-            wl.clone()
-        } else {
-            format!("{rundir}/{wl}")
-        };
-        if Path::new(&sock).exists() {
-            push(&mut a, &["--bind", &sock, &sock]);
-            extra_env.push(("WAYLAND_DISPLAY".into(), wl));
-        } else {
-            eprintln!("orkh: wayland socket {sock} not found, skipping");
-        }
-    }
-
-    // quack
+    // duckwm
     let duck_dest = format!("{rundir}/duckwm.sock");
     let duck_src = [duck_dest.clone(), format!("/tmp/duckwm-{uid}.sock")]
         .into_iter()
@@ -289,7 +262,7 @@ pub fn ensure_sandboxed() {
 
     let mut dirs = vec!["/etc", "/run", "/run/user"];
     if nixos {
-        dirs.extend(["/nix", "/bin"]);
+        dirs.push("/nix");
     }
     for d in dirs {
         push(&mut a, &["--chmod", "0755", d]);
@@ -316,9 +289,6 @@ pub fn ensure_sandboxed() {
             "1",
         ],
     );
-    for (k, v) in &extra_env {
-        push(&mut a, &["--setenv", k, v]);
-    }
     if let Ok(bt) = std::env::var("RUST_BACKTRACE") {
         push(&mut a, &["--setenv", "RUST_BACKTRACE", &bt]);
     }
@@ -328,7 +298,7 @@ pub fn ensure_sandboxed() {
 
     if cfg!(debug_assertions) && std::env::var_os("ORKH_DEBUG_SHELL").is_some() {
         // Debug builds only: inspect the sandbox from a shell
-        cmd.arg("sh");
+        cmd.arg(SHELL);
     } else {
         cmd.arg(&exe).args(std::env::args_os().skip(1));
     }

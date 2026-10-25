@@ -1,7 +1,5 @@
 use openrgb2::{Color, OpenRgbClient, OpenRgbResult};
-use orkh::config::{
-    parse_config, parse_mmsg_output, parse_quack_output, ConfigWatcher, LedApplicator,
-};
+use orkh::config::{parse_config, ConfigWatcher, LedApplicator};
 use orkh::keyboard::KeyboardListener;
 use std::collections::HashSet;
 use std::process::Command;
@@ -11,23 +9,6 @@ const OPENRGB: &str = match option_env!("ORKH_OPENRGB") {
     Some(p) => p,
     None => "openrgb",
 };
-
-fn parse_workspace_output(
-    output: &str,
-    config_yaml: &Option<yaml_rust2::Yaml>,
-) -> Vec<orkh::config::Value> {
-    let wm = config_yaml
-        .as_ref()
-        .and_then(|c| c["window_manager"].as_str())
-        .unwrap_or("");
-    match wm {
-        "duckwm" => parse_quack_output(output),
-        _ => {
-            let lines: Vec<&str> = output.lines().collect();
-            parse_mmsg_output(&lines)
-        }
-    }
-}
 
 fn main() -> OpenRgbResult<()> {
     orkh::sandbox::ensure_sandboxed();
@@ -59,12 +40,7 @@ async fn run() -> OpenRgbResult<()> {
     let mut applicator = config.as_ref().map(LedApplicator::new);
 
     // Get initial workspace states
-    let mut workspace_states = if let Some(workspace_output) = watcher.get_recent_workspace_output()
-    {
-        parse_workspace_output(&workspace_output, &config_yaml)
-    } else {
-        Vec::new()
-    };
+    let mut workspace_states = watcher.get_workspace_states();
 
     // Update applicator with initial workspace states
     if let Some(ref mut app) = applicator.as_mut() {
@@ -161,9 +137,8 @@ async fn run() -> OpenRgbResult<()> {
             }
 
             // Workspace state changed
-            Ok(workspace_output) = workspace_rx.recv() => {
-                // Parse workspace output using the appropriate parser for the window manager
-                workspace_states = parse_workspace_output(&workspace_output, &config_yaml);
+            Ok(states) = workspace_rx.recv() => {
+                workspace_states = states;
 
                 // Update applicator
                 if let Some(ref mut app) = applicator.as_mut() {

@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-openrgb2 = "0.3"
-tokio = { version = "1", features = ["full"] }
+openrgb2 = "0.4.1"
+tokio = { version = "1.54.1", features = ["full"] }
 evdev = "0.13.2"
-yaml-rust2 = "0.11.0"
-notify = "8.2.0"
-serde =  { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-libc = "0.2.180"
+yaml-rust2 = "0.13.0"
+notify = "8.2.1"
+serde =  { version = "1.0.229", features = ["derive"] }
+libc = "0.2.191"
 nix = { version = "0.31.3", features = ["user"] }
+duckwm = { git = "https://github.com/DuckTapeMan35/duckwm_rust" }
